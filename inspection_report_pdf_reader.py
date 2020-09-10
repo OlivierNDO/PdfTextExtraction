@@ -2,6 +2,7 @@
 ###############################################################################
 import datetime
 from io import StringIO
+import itertools
 import pandas as pd
 from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
@@ -9,9 +10,9 @@ from pdfminer.pdfdocument import PDFDocument
 from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
+import PyPDF2
 import pyodbc
 import re
-import sqlalchemy
 import sys
 import time
 import tkinter as tk
@@ -19,14 +20,31 @@ import tkinter.filedialog
 
 # Input File(s)
 # Source: https://vadenpropertyinspections.com/wp-content/uploads/2016/03/Inspection-Report.pdf
+config_file_path = 'D:/pdf_reader/source_data/Inspection-Report.pdf'
 config_source_dir = 'D:/pdf_reader/source_data'
-#config_file_path = 'D:/pdf_reader/source_data/Inspection-Report.pdf'
 config_db_info = 'D:/pdf_reader/database/db_config.csv'
 
 
 
 ### Define Functions and Classes
 ###############################################################################
+
+def get_substring_between_patterns(input_string, pattern_one, pattern_two, strip = True):
+    """
+    Extract substring between starting and ending regular expression delimiters
+    Args:
+        input_string (str): string to search
+        pattern_one (str): beginning delimiter
+        pattern_two (str): ending delimiter
+        string (boolean): strip leading and trailing whitespace. defaults to True.
+    """
+    if strip:
+        output_string = input_string.split(pattern_one)[1].split(pattern_two)[0].strip()
+    else:
+        output_string = input_string.split(pattern_one)[1].split(pattern_two)[0]
+    return output_string
+
+
 def print_timestamp_message(message, timestamp_format = '%Y-%m-%d %H:%M:%S'):
     """
     Print formatted timestamp followed by custom message
@@ -60,11 +78,9 @@ class InspectionPdfReader:
         self.checkmark_identifier = checkmark_identifier
         self.top_n_records = top_n_records
         
-        
     def get_db_config_dict(self):
         config_df = pd.read_csv(self.db_config_file_path)
         return dict(zip(config_df['attribute'], config_df['value']))
-    
     
     def create_pyodbc_conn(self):
         db_config_dict = self.get_db_config_dict()
@@ -80,7 +96,6 @@ class InspectionPdfReader:
         cursor.fast_executemany = True
         return connection, cursor
     
-    
     def get_string(self):
         output = StringIO()
         with open(self.pdf_file_path, 'rb') as f:
@@ -93,7 +108,6 @@ class InspectionPdfReader:
                 interpreter.process_page(p)
         clean_output = ' '.join(output.getvalue().replace('\n', ' ').split())
         return clean_output
-        
     
     def get_string_list(self):
         output = StringIO()
@@ -107,8 +121,14 @@ class InspectionPdfReader:
                 interpreter.process_page(p)
         clean_output = [s for s in output.getvalue().split('\n') if s != '']
         return clean_output
+    
+    def get_subsection_text(self):
+        string_list = self.get_string_list()
+        subsection_indices = [i for i, x in enumerate(string_list) if self.checkmark_identifier in x]
+        subsection_text_list = [' '.join(string_list[subsection_indices[i-1]:subsection_indices[i]]) for i in range(1, len(subsection_indices))]
+        last_subsection = ' '.join(string_list[subsection_indices[-1]::]).split('Inspection Summary')[0].split('REI')[0]
+        return subsection_text_list + [last_subsection]
        
-        
     def get_inspection_date(self):
         pdf_string = self.get_string()
         date_str = re.search(self.inspection_date_regex, pdf_string)
@@ -119,7 +139,6 @@ class InspectionPdfReader:
             output = None
         return output
     
-    
     def get_inspector_name(self):
         pdf_string = self.get_string()
         try:
@@ -127,7 +146,6 @@ class InspectionPdfReader:
         except:
             inspector_name = ''
         return inspector_name
-    
     
     def get_client_name(self):
         string_list = self.get_string_list()
@@ -137,7 +155,6 @@ class InspectionPdfReader:
             client_name = ''
         return client_name
     
-    
     def get_client_location(self):
         string_list = self.get_string_list()
         try:
@@ -146,6 +163,35 @@ class InspectionPdfReader:
             client_loc = ''
         return client_loc
     
+    def get_foundation_type(self):
+        subsection_text = self.get_subsection_text()
+        foundation_str = [s for s in subsection_text if 'Type of Foundation(s):' in s]
+        foundation_type = get_substring_between_patterns(foundation_str[0], 'Type of Foundation(s):', 'Comments:')
+        return foundation_type
+    
+    def get_roof_type(self):
+        subsection_text = self.get_subsection_text()
+        roof_str = [s for s in subsection_text if 'Types of Roof Covering:' in s]
+        roof_type = get_substring_between_patterns(roof_str[0], 'Types of Roof Covering:', 'Viewed From:')
+        return roof_type
+    
+    def get_insulation_depth(self):
+        subsection_text = self.get_subsection_text()
+        insulation_str = [s for s in subsection_text if 'Approximate Average Depth of Insulation:' in s]
+        insulation_depth = get_substring_between_patterns(insulation_str[0], 'Approximate Average Depth of Insulation:', 'Comments:')
+        return insulation_depth
+    
+    def get_heating_sys_type(self):
+        subsection_text = self.get_subsection_text()
+        heating_str = [s for s in subsection_text if ('Heating Equipment' in s) and ('Type of Systems:' in s)]
+        heating_sys = get_substring_between_patterns(heating_str[0], 'Type of Systems:', 'Comments:')
+        return heating_sys
+    
+    def get_cooling_sys_type(self):
+        subsection_text = self.get_subsection_text()
+        cooling_str = [s for s in subsection_text if ('Cooling Equipment' in s) and ('Type of Systems:' in s)]
+        cooling_sys = get_substring_between_patterns(cooling_str[0], 'Type of Systems:', 'Comments:')
+        return cooling_sys
     
     def get_inspector_grading(self):
         string_list = self.get_string_list()
@@ -173,15 +219,18 @@ class InspectionPdfReader:
                                   'deficient' : deficient_list})
         return output_df
     
-    
     def generate_table(self):
         grading = self.get_inspector_grading()
         grading['inspector_name'] = self.get_inspector_name()
         grading['inspection_date'] = self.get_inspection_date()
         grading['client_name'] = self.get_client_name()
         grading['client_location'] = self.get_client_location()
+        grading['foundation_type'] = self.get_foundation_type()
+        grading['roof_type'] = self.get_roof_type()
+        grading['insulation_depth'] = self.get_insulation_depth()
+        grading['heating_system'] = self.get_heating_sys_type()
+        grading['cooling_system'] = self.get_cooling_sys_type()
         return grading
-    
     
     def insert_into_database(self):
         # Read and Transform File
@@ -202,15 +251,15 @@ class InspectionPdfReader:
         INSERT INTO 
             {db_config_dict.get('table')}
             (category, inspected, not_inspected, not_present, deficient,
-            inspector_name, inspection_date, client_name, client_location) 
+            inspector_name, inspection_date, client_name, client_location,
+            foundation_type, roof_type, insulation_depth, heating_system, cooling_system)
         VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         cursor.executemany(sql_str, table.values.tolist())
         cursor.commit()
         print_timestamp_message(f"Closing connection to remote database: '{db_config_dict.get('database')}'")
         conn.close()
-    
     
     def clear_table_records(self):
         # Connect to Azure Database
@@ -226,7 +275,6 @@ class InspectionPdfReader:
         print_timestamp_message(f"Closing connection to remote database: '{db_config_dict.get('database')}'")
         conn.close()
     
-    
     def read_table_records(self):
         # Connect to Azure Database
         db_config_dict = self.get_db_config_dict()
@@ -240,7 +288,6 @@ class InspectionPdfReader:
         print_timestamp_message(f"Closing connection to remote database: '{db_config_dict.get('database')}'")
         conn.close()
         return table_records
-    
     
     def print_top_n_records(self):
         # Connect to Azure Database
@@ -257,9 +304,7 @@ class InspectionPdfReader:
 
 
 ### Run Script
-###############################################################################
-        
-        
+###############################################################################     
 if __name__ == '__main__':
     config_file_path = sys.argv[1]
     
@@ -268,19 +313,6 @@ if __name__ == '__main__':
     
     # Process File and Insert into Database
     inspection_text.insert_into_database()
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
