@@ -10,8 +10,10 @@ from pdfminer.pdfdocument import PDFDocument
 from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
+from pynput.keyboard import Key, Controller
 import PyPDF2
 import pyodbc
+
 import re
 import sys
 import time
@@ -55,6 +57,26 @@ def print_timestamp_message(message, timestamp_format = '%Y-%m-%d %H:%M:%S'):
     ts_string = datetime.datetime.fromtimestamp(time.time()).strftime(timestamp_format)
     print(f'{ts_string}: {message}')
 
+        
+
+def type_simulation_print(print_string, delay = 0.035, use_timestamp = False, timestamp_format = '%Y-%m-%d %H:%M:%S'):
+    """
+    Use time.sleep() within a print statement to simulate typing in the console
+    Args:
+        print_string (str): string to print
+        delay (float): seconds to delay between character prints. defaults to 0.035
+        use_timestamp (boolean): True / False .. print timestamp at the beginning of message. defaults to False.
+        timestamp_format (str): format for datetime string. defaults to '%Y-%m-%d %H:%M:%S'.
+    """
+    if use_timestamp:
+        ts_string = datetime.datetime.fromtimestamp(time.time()).strftime(timestamp_format)
+        concat_print_string = f'{ts_string} {print_string}'
+        for i in range(len(concat_print_string)):
+            print(concat_print_string[i], sep = '', end = '', flush = True); time.sleep(delay)
+    else:
+        for i in range(len(print_string)):
+            print(print_string[i], sep = '', end = '', flush = True); time.sleep(delay)
+    
 
 class InspectionPdfReader:
     """
@@ -68,7 +90,9 @@ class InspectionPdfReader:
                  inspection_date_input_format = '%B %d %Y',
                  inspection_date_output_format = '%Y-%m-%d',
                  checkmark_identifier = '☑',
-                 top_n_records = 5):
+                 top_n_records = 5,
+                 verbose = True,
+                 verbose_pause = 0.5):
         self.pdf_file_path = pdf_file_path
         self.db_config_file_path = db_config_file_path
         self.inspector_name_regex = inspector_name_regex
@@ -77,6 +101,8 @@ class InspectionPdfReader:
         self.inspection_date_output_format = inspection_date_output_format
         self.checkmark_identifier = checkmark_identifier
         self.top_n_records = top_n_records
+        self.verbose = verbose
+        self.verbose_pause = verbose_pause
         
     def get_db_config_dict(self):
         config_df = pd.read_csv(self.db_config_file_path)
@@ -232,21 +258,94 @@ class InspectionPdfReader:
         grading['cooling_system'] = self.get_cooling_sys_type()
         return grading
     
+    def generate_table_verbose(self):
+        # Section Headers
+        header_brand = 'ooo Fractal Analytics'
+        header_title = 'Home Inspection Report - PDF Feature Extraction'
+        header_insp_info = '<> Inspection Information'
+        header_assess_info = '<> Inspector Assessments:'
+        header_desc_feats = '<> Descriptive Features'    
+        
+        type_simulation_print(header_brand); print('\n')
+        type_simulation_print(header_title); print('\n')
+        
+        # Extract Assessment & Inspection Identifier Information
+        type_simulation_print(header_insp_info); print('\n')
+        grading = self.get_inspector_grading()
+        tbl = self.generate_table()
+        inspector_name = self.get_inspector_name()
+        inspection_date = self.get_inspection_date()
+        client_name = self.get_client_name()
+        client_location = self.get_client_location()
+        
+        # Print Assessment & Inspection Identifier Information
+        type_simulation_print(f'Inspection performed by {inspector_name} for {client_name} at {client_location} on {inspection_date}'); print('\n')
+        type_simulation_print('Extracting inspector assessments ... '); print('\n')
+        grading = inspection_text.get_inspector_grading()
+        n_inspected = sum(grading.inspected)
+        n_deficient = sum(grading.deficient)
+        type_simulation_print(f'{n_deficient} of {n_inspected} items inspected deemed deficient'); print('\n')
+        type_simulation_print(header_assess_info); print('\n')
+        for i in range(tbl.shape[0]):
+            category = tbl['category'][i]
+            if tbl['inspected'][i] != 1:
+                inspected = 'Not Inspected'
+                deficient = ''
+            else:
+                inspected = ''
+                if tbl['deficient'][i] == 1:
+                    deficient = 'Assessment: Deemed Deficient'
+                else:
+                    deficient = 'Assessment: Acceptable'
+            type_simulation_print(f'{category}: {inspected} {deficient}', use_timestamp = True, delay = 0.005); print('\n')
+            time.sleep(self.verbose_pause)
+            
+        # Generate Categorical Features & Print Timestamp Messages
+        type_simulation_print(header_desc_feats); print('\n')
+        foundation_type = self.get_foundation_type()
+        type_simulation_print(f'Foundation Type: {foundation_type}'); time.sleep(self.verbose_pause); print('\n')
+        roof_type = self.get_roof_type()
+        type_simulation_print(f'Roof Type: {roof_type}'); time.sleep(self.verbose_pause); print('\n')
+        insulation_depth = self.get_insulation_depth()
+        type_simulation_print(f'Insulation Depth: {insulation_depth}'); time.sleep(self.verbose_pause); print('\n')
+        heating_system = self.get_heating_sys_type()
+        type_simulation_print(f'Heating System: {heating_system}'); time.sleep(self.verbose_pause); print('\n')
+        cooling_system = self.get_cooling_sys_type()
+        type_simulation_print(f'Cooling System: {cooling_system}'); time.sleep(self.verbose_pause); print('\n')
+        
+        # Collect Data Points in Dataframe
+        grading['inspector_name'] = inspector_name
+        grading['inspection_date'] = inspection_date
+        grading['client_name'] = client_name
+        grading['client_location'] = client_location
+        grading['foundation_type'] = foundation_type
+        grading['roof_type'] = roof_type
+        grading['insulation_depth'] = insulation_depth
+        grading['heating_system'] = heating_system
+        grading['cooling_system'] = cooling_system
+        
+        return grading
+            
+    
     def insert_into_database(self):
         # Read and Transform File
         pdf_folder_name = '/'.join(self.pdf_file_path.split('/')[:-1])
         pdf_file_name = inspection_text.pdf_file_path.split('/')[-1]
-        print_timestamp_message(f"Reading and transforming PDF File: '{pdf_file_name}' from '{pdf_folder_name}'")
-        table = self.generate_table()
+        type_simulation_print(f"Reading and transforming PDF File: '{pdf_file_name}' from '{pdf_folder_name}'"); print('\n')
+        if self.verbose:
+            table = self.generate_table_verbose()
+            type_simulation_print('<> Database Loading'); print('\n')
+        else:
+            table = self.generate_table()
         
         # Connect to Azure Database
         db_config_dict = self.get_db_config_dict()
-        print_timestamp_message(f"Connecting to remote database: '{db_config_dict.get('database')}'")
+        type_simulation_print(f"Connecting to remote database: '{db_config_dict.get('database')}'"); print('\n')
         conn, cursor = self.create_pyodbc_conn()
         
         # Insert Features into Table
         n_rows = table.shape[0]
-        print_timestamp_message(f"Appending {n_rows} rows to table: '{db_config_dict.get('table')}'")
+        type_simulation_print(f"Appending {n_rows} rows to table: '{db_config_dict.get('table')}'"); print('\n')
         sql_str = f"""
         INSERT INTO 
             {db_config_dict.get('table')}
@@ -258,7 +357,7 @@ class InspectionPdfReader:
         """
         cursor.executemany(sql_str, table.values.tolist())
         cursor.commit()
-        print_timestamp_message(f"Closing connection to remote database: '{db_config_dict.get('database')}'")
+        type_simulation_print(f"Closing connection to remote database: '{db_config_dict.get('database')}'"); print('\n')
         conn.close()
     
     def clear_table_records(self):
@@ -313,9 +412,4 @@ if __name__ == '__main__':
     
     # Process File and Insert into Database
     inspection_text.insert_into_database()
-
-
-
-
-
 

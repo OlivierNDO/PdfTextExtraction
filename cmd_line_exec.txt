@@ -1,0 +1,2 @@
+cd /d D:\
+python D:\PdfTextExtraction\PdfTextExtraction\inspection_report_pdf_reader.py D:/pdf_reader/source_data/Inspection-Report.pdf
